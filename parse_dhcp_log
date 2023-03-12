@@ -1,0 +1,139 @@
+#!/usr/bin/perl
+# Parse dhcpd syslogs for and display timeframes and ip addresses held by a particular mac address
+#
+# 2015-06-03  dargel(at)uwplatt.edu  Created
+
+use strict;
+use Date::Parse;
+
+# Defaults
+my ($since, $before, $mac_opt);
+my ($start_time, $end_time, $last_ip, $last_host);
+
+# Parse command options
+use Getopt::Long;
+my %opts=();
+Getopt::Long::Configure qw(bundling);
+GetOptions(\%opts,
+  "since=s" => sub{$since=str2time($_[1])},
+  "before=s" => sub{$before=str2time($_[1])},
+  "mac=s" => sub{$mac_opt=lc($_[1])},
+  "help|usage|?" => \&usage) or usage();
+
+$ARGV[0] = '-' if (!$ARGV[0]);  # Stdio if no input file
+
+# Subroutine to print usage
+sub usage {
+  print <<EOT;
+Usage: $0 [OPTIONS] --mac=[MAC] [FILE]...
+Parse dhcpd syslogs for and display timeframes and ip addresses held by a particular mac address
+
+  [FILE]  Log files may be specified on the command line or records may be
+          piped in.  Files ending in ".gz" will be decompressed when read.
+
+  --mac=mac                Mac address to search for (required)
+  --since=datetime         Only consider records since datetime
+  --before=datetime        Only consider records before datetime
+  -?, --help, --usage      Outputs program usage.
+
+EOT
+  exit;
+}
+
+#-------------------------------------------------------------------------------
+# Mainline
+
+usage if not ($mac_opt);
+
+# Parse each input file
+parse_file($_) foreach (@ARGV);
+
+output();
+exit;
+
+#-------------------------------------------------------------------------------
+# Output results
+sub output {
+  print "$mac_opt $last_ip $start_time - $end_time $last_host\n" if ($last_ip);
+}
+
+#-------------------------------------------------------------------------------
+# Parse the contents of a file
+sub parse_file {
+  my($inf) = @_;
+
+  # Check if compressed and open file
+  $inf =~ s/(.*\.gz)$/zcat $1|/;
+  $inf =~ s/(.*\.bz)$/bzcat $1|/;
+  $inf =~ s/(.*\.bz2)$/bzcat $1|/;
+  open(INF, $inf) or die "can't open $inf: $!";
+
+  # Parse records of the file
+  while (<INF>) {
+    chomp;
+    parse_log_line($_);
+  }
+  close INF or die "bad stat: $! $?";
+}
+
+#-------------------------------------------------------------------------------
+sub parse_log_line
+{
+  # Grab the line we were given
+  my($line) = @_;
+
+  # Remove any filename
+  $line =~ s/^(.+?:)(\w\w\w [ \d]\d \d\d:\d\d:\d\d \S+ dhcpd\[\d+\]: \w+ )/$2/;
+
+  # Parse the header
+  return if (not $line =~ /^(\w\w\w [ \d]\d \d\d:\d\d:\d\d) (\S+) dhcpd\[\d+\]: (\w+) /);
+  my ($timestamp, $server, $message) = ($1, $2, $3);
+
+#  # Check time range
+#  if ($since || $before) {
+#    my $t = str2time($timestamp);
+#    return if ($since && $t < $since);
+#    return if ($before && $t > $before);
+#  }
+
+
+  if ($message eq "DHCPREQUEST") {
+    $line =~ /^\w\w\w [ \d]\d \d\d:\d\d:\d\d \S+ dhcpd\[\d+\]: DHCPREQUEST for (\d+\.\d+\.\d+\.\d+) .*from (\w\w:\w\w:\w\w:\w\w:\w\w:\w\w) (\(.+?\))?/;
+    my ($ip, $mac, $host) = ($1, $2, $3);
+    return if ($mac ne $mac_opt);
+    $last_host = $host if ($host);
+    if ($ip ne $last_ip) {
+      $end_time = $timestamp if (not $end_time);  # Use current time if lease was not expired
+      print "$mac_opt $last_ip $start_time - $end_time $last_host\n" if ($last_ip);
+      $last_ip = $ip;
+      $start_time = $timestamp;
+      $end_time = '';
+      $last_host = $host;
+    }
+#    print "$timestamp: $ip, $mac, $host $line\n";
+  }
+
+  if ($message eq "DHCPEXPIRE") {
+    $line =~ /^\w\w\w [ \d]\d \d\d:\d\d:\d\d \S+ dhcpd\[\d+\]: DHCPEXPIRE on (\d+\.\d+\.\d+\.\d+) .*to (\w\w:\w\w:\w\w:\w\w:\w\w:\w\w)/;
+    my ($ip, $mac) = ($1, $2);
+    return if ($mac ne $mac_opt);
+    if ($ip eq $last_ip) {
+      $end_time = $timestamp;
+    } else {
+      $end_time = $start_time;
+    }
+  }
+
+  if ($message eq "DHCPDECLINE") {
+    $line =~ /^\w\w\w [ \d]\d \d\d:\d\d:\d\d \S+ dhcpd\[\d+\]: DHCPDECLINE of (\d+\.\d+\.\d+\.\d+) .*from (\w\w:\w\w:\w\w:\w\w:\w\w:\w\w)/;
+    my ($ip, $mac) = ($1, $2);
+    return if ($mac ne $mac_opt);
+    $last_ip = "";
+    $start_time = "";
+    $end_time = "";
+    $last_host = "";
+  }
+
+  # Output log line
+#  print $line,"\n";
+}

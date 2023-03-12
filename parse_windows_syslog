@@ -1,0 +1,59 @@
+#!/usr/bin/perl
+# Parse the snare syslog records from windows systems
+#
+# 2017-03-08 dargel(at)uwplatt.edu  Created
+
+use strict;
+
+my $lines = 0;
+
+$ARGV[0] = '-' if (!$ARGV[0]);  # Stdio if no input file
+
+#-------------------------------------------------------------------------------
+# Mainline
+
+# Parse each input file
+parse_file($_) foreach (@ARGV);
+
+exit;
+
+#-------------------------------------------------------------------------------
+# Parse the contents of a file
+sub parse_file {
+  my($inf) = @_;
+
+  # Check if compressed and open file
+  $inf =~ s/(.*\.gz)$/zcat $1|/;
+  $inf =~ s/(.*\.bz2)$/bzcat $1|/;
+  open(INF, $inf) or die "can't open $inf: $!";
+
+  # Parse records of the file
+  while (<INF>) {
+    chomp;
+    parse_log_line($_);
+  }
+  close INF or die "bad stat: $! $?";
+}
+
+#-------------------------------------------------------------------------------
+sub parse_log_line
+{
+  my ($ClientAddress,$Account,$SourceWorkstation);
+
+  # Grab the line we were given
+  my($line) = @_;
+
+  # Increment counters for each field
+  $lines++;
+
+  # Parse the line
+  $line =~ /^(\w+ +\d+ ..:..:..) ([^ ]+) MSWinEventLog\t(\d+)\t([^\t]+)\t(\d+)\t([^\t]+)\t(\d+)\t([^\t]+)\t([^\t]+)\t([^\t]+)\t([^\t]+)\t([^\t]+)\t([^\t]+)\t(.*)/;
+  my ($TimeStamp, $Hostname, $Criticality, $EventLogSource, $SnareCounter, $SubmitTime, $EventID, $SourceName, $UserName, $SIDType, $EventLogType, $ComputerName, $Category, $Data) = ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14);
+#  ($Account) = ($1) if ($Data =~ /Account Name:  ([^\s]+)/);
+  ($ClientAddress) = ($1) if ($Data =~ /Client Address:  ::ffff:([^\s]+)/);
+  ($SourceWorkstation) = ($1) if ($Data =~ /Source Workstation: ([^\s]+)/);
+
+  # Output log line
+#  print "$SubmitTime, $UserName, $EventLogType, $Category, $Account\n" if ($Account !~ /\$$/ && $UserName !~ /\$\@/ && $Account ne '-');
+  print "$SubmitTime,$UserName,$EventLogType,$Category,$SourceWorkstation,$ClientAddress\n" if ($UserName !~ /\$$/ && $UserName !~ /\$\@/ && $UserName ne '');
+}

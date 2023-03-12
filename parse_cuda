@@ -1,0 +1,390 @@
+#!/usr/bin/perl
+# Parse the syslog output of a Barracuda AntiSPAM Appliance
+#
+# 2007-03-30  dargel(at)uwplatt.edu  Created (Parts from Barracuda support)
+
+use strict;
+use Date::Parse;
+
+# Hash of Barracuda Action Codes (for RECV and SCAN services)
+my %actions = (
+  0 => 'Allowed',
+  1 => 'Aborted',
+  2 => 'Blocked',
+  3 => 'Quarantined',
+  4 => 'Tagged',
+  5 => 'Deferred',
+  6 => 'Per-User Quarantined',
+  7 => 'Whitelisted'
+);
+# Hash of Barracuda Action Codes (for SEND service)
+my %actions_send = (
+  1 => 'Delivered',
+  2 => 'Rejected',
+  3 => 'Deferred',
+  4 => 'Expired'
+);
+# Hash of Barracuda Reason Codes (for RECV and SCAN services)
+my %reasons = (
+  1  => 'Virus',
+  2  => 'Banned Attachment',
+  3  => 'RBL Match',
+  4  => 'Rate Control',
+  5  => 'Too Many Message In Session',
+  6  => 'Timeout Exceeded',
+  7  => 'No Such Domain',
+  8  => 'No Such User',
+  9  => 'Subject Filter Match',
+  11 => 'Client IP',
+  12 => 'Recipient Address Rejected',
+  13 => 'No Valid Recipients',
+  14 => 'Domain Not Found',
+  15 => 'Sender Address Rejected',
+  17 => 'Need Fully Qualified Recipient',
+  18 => 'Need Fully Qualified Sender',
+  19 => 'Unsupported Command',
+  20 => 'MAIL FROM Syntax Error',
+  21 => 'Bad Address Syntax',
+  22 => 'RCPT TO Syntax Error',
+  23 => 'Send EHLO/HELO First',
+  24 => 'Need MAIL Command',
+  25 => 'Nested MAIL COmmand',
+  27 => 'EHLO/HELO Syntax Error',
+  30 => 'Mail Protocol Error',
+  31 => 'Score',
+  34 => 'Header Filter Match',
+  35 => 'Sender Block/Accept',
+  36 => 'Recipient Block/Accept',
+  37 => 'Body Filter Match',
+  38 => 'Message Size Bypass',
+  39 => 'Intention Analysis Match',
+  40 => 'SPF/Caller-ID',
+  41 => 'Client Host Rejected',
+  44 => 'Authentication Not Enabled',
+  45 => 'Allowed Message Size Exceeded',
+  46 => 'Too Many Recipients',
+  47 => 'Need RCPT Command',
+  48 => 'DATA Syntax Error',
+  49 => 'Internal Error',
+  50 => 'Too Many Hops',
+  55 => 'Invalid Parameter Syntax',
+  56 => 'STARTTLS Syntax Error',
+  57 => 'TLS Already Active',
+  58 => 'Too Many Errors',
+  59 => 'Need STARTTLS First',
+  60 => 'Spam Fingerprint Found'
+);
+
+# Defaults
+my $t = "|"; # Field Separator
+
+# Parse command options
+use Getopt::Long;
+my %opts=();
+Getopt::Long::Configure qw(bundling);
+GetOptions(\%opts,
+  "host=s",
+  "start=s",
+  "end=s",
+  "from=s",
+  "to=s",
+  "subject=s",
+  "ip=s",
+  "id=s",
+  "score_min=f",
+  "score_max=f",
+  "action=s",
+  "reason=s",
+  "seperator=s" => \$t,
+  "h",
+  "c:80",
+  "s",
+  "m",
+  "a",
+  "p",
+  "b",
+  "d",
+  "f",
+  "help|usage|?" => \&usage) or usage();
+
+$ARGV[0] = '-' if (!$ARGV[0]);  # Stdio if no input file
+$opts{start} = str2time($opts{start}) if $opts{start};
+$opts{end} = str2time($opts{end}) if $opts{end};
+
+# Create output format
+$t = "\t" if ($t eq "tab");  # allow tab seperators
+my $fmt="%s$t" x 15 . "%s\n";  # Using separators
+if ($opts{c}) {
+  if ($opts{s}) { # SEND format
+    # compute dynamic column width for some columns
+    my $w = $opts{c} - 80;
+    $w = 0 if ($w < 0);
+    my $w_id = 10+int($w/2);  # min width of 10
+    $w_id = 30 if ($w_id > 30);  # max width of 30
+    my $w_reason = $w +80-24- $w_id;  # remainder goes here
+    $fmt="%-15.15s %.0s%.0s%.0s%.0s%-$w_id.${w_id}s %.0s%.0s%-1.1s %.0s%.0s%.0s%-3.3s %-$w_reason.${w_reason}s %.0s%.0s\n";
+
+  } else {
+    # compute dynamic column width for some columns
+    my $w = int(($opts{c} - 80) / 5);  # for every 5 chars wider, add 1 char to each of 5 cols
+    $w = 0 if ($w < 0);
+    my $w12 = 12+$w;  # cols with minimum width of 12
+    my $w_reason = 6+int($w*0.5);  # only grows at .5 the rate
+    my $w_sub = 10+int($w*1.5);  # grows at 1.5 the rate
+    $fmt="%-15.15s %-.0s%.0s%-4.4s %.0s%.0s%.0s%.0s%.0s%-$w12.${w12}s %-$w12.${w12}s %.0s%-2.2s %-$w_reason.${w_reason}s %-$w12.${w12}s %-$w_sub.${w_sub}s\n";
+  }
+}
+
+# Subroutine to print usage
+sub usage {
+  print <<EOT;
+Usage: $0 [OPTIONS] [FILE]...
+Parses records from a Barracuda AntiSPAM logfile and outputs filtered lines in
+a readable format.
+
+  [FILE]  Log files may be specified on the command line or records may be
+          piped in.  Files ending in ".gz" or ".bz2" will be decompressed when read.
+
+  --host=PATTERN           Output records from Barracuda name matching regexp
+  --start=DATETIME         Output records with timestamp after DATETIME
+  --end=DATETIME           Output records with timestamp before DATETIME
+  --from=PATTERN           Sender address must match regexp
+  --to=PATTERN             Receipient address must match regexp
+  --subject=PATTERN        Subject must match regexp
+  --ip=PATTERN             Client IP/Hostname must match regexp
+                             Format: hostname[ip]
+  --id=PATTERN             Message ID must match regexp
+  --score_min=NUMBER       Score must be >= NUMBER
+  --score_max=NUMBER       Score must be <= NUMBER
+  --action=PATTERN         Action must match regexp
+                             RECV/SCAN Actions: 
+                               Allowed, Aborted, Blocked, Quarantined, Tagged,
+                               Deferred, Per-User Quarantined, Whitelisted
+                             SEND Actions:
+                               Delivered, Rejected, Deferred, Expired
+  --reason=PATTERN         Reason must match regexp
+                             RECV/SEND Reasons:
+EOT
+  # Output reasons
+  print "                               $_\n" foreach (values(%reasons)); 
+  print <<EOT;
+  --seperator=SEPERATOR    Field seperator (if "tab" then use tabs)
+  -?, --help, --usage      Outputs program usage.
+  -h                       Include field headings
+  -c, --c=WIDTH            Format output into fixed columns
+
+  Default is to output only RECV and SCAN records
+  -s                       Output only SEND records
+  -m                       Output only non-Barracuda records
+  -a                       Output all matching Barracuda records
+  -p                       Output only permitted records
+  -b                       Output only blocked records
+  -d                       Output only deferred records
+  -f                       Output records added to file in real time (follow)
+                             Uses: tail -f [FILE] | $0
+
+EOT
+  exit;
+}
+
+#-------------------------------------------------------------------------------
+# Mainline
+
+# Print headings
+printf $fmt, 
+  "Time",
+  "Host",
+  "Process",
+  "Service",
+  "IP",
+  "Message ID", 
+  "Start Time",
+  "End Time",
+  "Encryption",
+  "From",
+  "To",
+  "Score",
+  "Action",
+  "Reason",
+  "Reason Detail",
+  "Subject"
+  if ($opts{h});
+
+# Parse each input file
+parse_file($_) foreach (@ARGV);
+exit;
+
+#-------------------------------------------------------------------------------
+# Parse the contents of a file
+sub parse_file {
+  my($inf) = @_;
+
+  # Check if compressed and open file
+  $inf =~ s/(.*\.gz)$/zcat $1|/;
+  $inf =~ s/(.*\.bz2)$/bzcat $1|/;
+  $inf = "tail -0f $inf |" if ($opts{f});  # follow file
+  open(INF, $inf) or die "can't open $inf: $!";
+
+  # Parse records of the file
+  while (<INF>) {
+    chomp;
+    parse_log_line($_);
+  }
+  close INF or die "bad stat: $! $?";
+}
+
+#-------------------------------------------------------------------------------
+sub parse_log_line
+{
+  # Grab the line we were given
+  my($line) = @_;
+
+  # These are the components we may have parsed out of the message based on the service
+  my ($timestamp, $time, $host, $process, $ip, $id, $start_time, $end_time, $service, $info);
+  my ($enc, $sender, $recip, $score, $action_id, $action, $reason_id, $reason, $reason_extra, $subject);
+
+  # Get the time and host
+  $line =~ /^(... .. ..:..:..) ([^\s]+) /;
+  ($timestamp, $host) = ($1, $2);
+
+  # Filter on timestamp
+  $time = str2time($timestamp);
+  return if $opts{start} and ($time < $opts{start});
+  return if $opts{end} and ($time > $opts{end});
+
+  return if $opts{host} and !($host =~ /$opts{host}/io);
+
+  # Grab the main components from the line 
+  # (IP, MSG_ID, START_TIME, END_TIME, SERVICE, INFO)
+  #
+  # NOTE: If this is for the SEND log line then the IP, as well as the 
+  # START/END times are bogus values of 127.0.0.1 and 0/0 respectively
+  if( $line =~ /^.* ([^\s]+): ([^\s]+) ([^\s]*) (\d+) (\d+) (RECV|SCAN|SEND) (.*)$/)
+  {
+    return if ($opts{m});  # limit to non-barracuda records only
+
+    # Grab the main pieces of the log entry and the process specific info
+    ($process, $ip, $id, $start_time, $end_time, $service, $info) = ($1, $2, $3, $4, $5, $6, $7);
+
+    # Filter records
+    return if $opts{ip} and !($ip =~ /$opts{ip}/io);
+    return if $opts{id} and !($id =~ /$opts{id}/io);
+
+    # Break out the process specific pieces from the info portion
+    if( $service =~ /RECV/ )
+    {
+      return if ($opts{s});  # limit to SEND records only
+
+      # Break the MTA info up into sender/recip/action/reason/reason_extra
+      if( $info =~ /([^\s]+)\s([^\s]+)\s(\d+)\s(\d+)\s(.*)$/ )
+      {
+        ($sender, $recip, $action_id, $reason_id, $reason_extra) = ($1, $2, $3, $4, $5);
+      }
+    }
+    elsif( $service =~ /SCAN/ )
+    {
+      return if ($opts{s});  # limit to SEND records only
+
+      # Break the scanner info up into 
+      # encrypted/sender/recip/score/action/reason/reason_extra/subject
+      if( $info =~ /([^\s]+)\s([^\s]+)\s([^\s]+)\s([-\.\d+]+)\s(\d+)\s(\d+)\s(.*)\sSUBJ:(.*)$/ )
+      {
+        ($enc, $sender, $recip, $score, $action_id, $reason_id, $reason_extra, $subject) = ($1, $2, $3, $4, $5, $6, $7, $8);
+
+#        # Set the subject line
+#        eval
+#        {
+#          # Note: if this is encoded you may want to decode it here and that
+#          # is why this section is in an eval . since nothing guarantees the
+#          # sender encoded the subject properly.
+#          $subject = decode($subject);
+#        };
+      }
+    }
+    elsif( $service =~ /SEND/ )
+    {
+      return if !($opts{s} or $opts{a});  # limit to SEND records only
+
+      # Break the Outbound MTA info up into encrypted/action/queue_id/response
+      if( $info =~ /([^\s]+)\s(\d+)\s([^\s]+)\s(.*)$/ )
+      {
+        my ($enc, $action_id, $queue_id, $reason) = ($1, $2, $3, $4);
+
+        # Do whatever you would like with the delivery transactions . just keep in
+        # mind that a single message may have multiple outbound entries because of
+        # being deferred by the downstream server.
+
+        # Set our action/reason
+        $action = $actions_send{$action_id};
+
+        # Filter output
+        return if $opts{action} and !($action =~ /$opts{action}/io);
+        return if $opts{reason} and !($reason =~ /$opts{reason}/io);
+        return if $opts{p} and !($action =~ /(Delivered)/i);
+        return if $opts{b} and !($action =~ /(Rejected|Expired)/i);
+        return if $opts{d} and !($action =~ /(Deferred)/i);
+
+        printf $fmt, 
+          $timestamp,
+          $host,
+          $process,
+          $service,
+          "",
+          $id, 
+          "",
+          "",
+          $enc,
+          "",
+          "",
+          "",
+          $action,
+          $reason,
+          "",
+          $queue_id;
+      }
+      return;
+    }
+
+    # Set our action/reason
+    $action = $actions{$action_id};
+    $reason = $reasons{$reason_id};
+
+    # Filter output
+    return if $opts{from} and !($sender =~ /$opts{from}/io);
+    return if $opts{to} and !($recip =~ /$opts{to}/io);
+    return if $opts{subject} and !($subject =~ /$opts{subject}/io);
+    return if $opts{action} and !($action =~ /$opts{action}/io);
+    return if $opts{reason} and !($reason =~ /$opts{reason}/io);
+    return if $opts{p} and !($action =~ /(Allowed|Tagged|Whitelisted)/i);
+    return if $opts{b} and !($action =~ /(Aborted|Blocked|Quarantined)/i);
+    return if $opts{d} and !($action =~ /(Deferred)/i);
+
+    # Filter on score
+    return if (defined($opts{score_min}) and $score < $opts{score_min});
+    return if (defined($opts{score_max}) and $score > $opts{score_max});
+
+    printf $fmt, 
+      $timestamp,
+      $host,
+      $process,
+      $service,
+      $ip,
+      $id, 
+      "".localtime($start_time),
+      "".localtime($end_time),
+      $enc,
+      $sender,
+      $recip,
+      $score,
+      $action,
+      $reason,
+      $reason_extra,
+      $subject;
+  } else {
+
+    # Non-Barracuda record
+    return if !($opts{m});
+    print $line, "\n";
+  }
+}
+

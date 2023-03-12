@@ -1,0 +1,67 @@
+#!/usr/bin/perl
+# Search a log with zgrep and report lines which do not match a file of usual patterns
+#
+# 2023-03-10  dargel(at)uwplatt.edu  Created
+
+use strict;
+
+my $usualfile;
+
+# Parse command options
+use Getopt::Long;
+my %opts=();
+my $flags;
+my $usualflag = '-v';
+Getopt::Long::Configure qw(bundling);
+GetOptions(\%opts,
+  "file=s" => \$usualfile,
+  "f",
+  "v" => sub {$usualflag = '';},
+  "A=i" => sub {$flags .= "-A $_[1] "},
+  "B=i" => sub {$flags .= "-B $_[1] "},
+  "C=i" => sub {$flags .= "-C $_[1] "},
+  "help|usage|?" => \&usage) or usage();
+
+# Subroutine to print usage
+sub usage {
+  print <<EOT;
+Usage: $0 [OPTIONS] [FILE]...
+Search a log with zgrep and report lines which do not match a file of usual patterns.
+  [FILE]  Log files may be specified on the command line or records may be
+          piped in.  Files ending in ".gz", ".bz", or ".bz2" will be
+          decompressed when read.
+  -f                       Output records added to file in real time (follow)
+  --file=usuaulfile        Specify the file of usual patterns to ignoree.
+                             FILE.usual is assumed, or base filename separated by . or -
+  -A NUM                   Print NUM lines of trailing context after matching lines.
+  -B NUM                   Print NUM lines of leading context before matching lines.
+  -C NUM                   Print NUM lines of output context.
+  -v                       Invert matching to select usuaal lines.
+  -?, --help, --usage      Outputs program usage.
+EOT
+  exit;
+}
+
+# Look for usual file (file of usual patterns) based on first log filename
+if (!$usualfile) {
+  if (-e $ARGV[0] . ".usual") {
+    $usualfile = $ARGV[0] . ".usual";
+  } elsif (-e (split /[.-]/, $ARGV[0])[0] . ".usual") {
+    $usualfile = (split /[.-]/, $ARGV[0])[0] . ".usual";
+  }
+}
+
+usage if (!$usualfile);
+
+print "Usual pattern file: $usualfile\n";
+
+if ($opts{f}) {
+  usage if ($#ARGV != 0);
+  print("tail -0f $ARGV[0] | zgrep $usualflag -E $flags -f $usualfile\n\n");
+  system("tail -0f $ARGV[0] | zgrep $usualflag -E $flags -f $usualfile");
+} else {
+  print("zgrep $usualflag -E $flags -f $usualfile @ARGV\n\n");
+  system("zgrep $usualflag -E $flags -f $usualfile @ARGV");
+}
+
+exit;

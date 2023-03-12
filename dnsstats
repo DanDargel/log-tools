@@ -1,0 +1,177 @@
+#!/usr/bin/perl
+# Parse the querylog output of named (ISC bind) and
+# display top results by category
+#
+# 2007-09-26  dargel(at)uwplatt.edu  Created
+# 2009-03-04  dargel(at)uwplatt.edu  Fixed to support views
+
+use strict;
+
+# Hashes to count totals for each field
+my ($total, %hosts, %domains, %types);
+
+# Defaults
+my $maxcount = 10;
+my $repinterval = 10;
+
+# Parse command options
+use Getopt::Long;
+my %opts=();
+Getopt::Long::Configure qw(bundling);
+GetOptions(\%opts,
+  "c:-1" => \$maxcount,
+  "p:10" => \$repinterval,
+  "t",
+  "h",
+  "d",
+  "q",
+  "f",
+  "help|usage|?" => \&usage) or usage();
+
+my $all = not ($opts{t} or $opts{h} or $opts{d});  # Output all categories
+
+$ARGV[0] = '-' if (!$ARGV[0]);  # Stdio if no input file
+
+# Subroutine to print usage
+sub usage {
+  print <<EOT;
+Usage: $0 [OPTIONS] [FILE]...
+Parses records from a named query logfile and outputs top results by
+category.
+
+  [FILE]  Log files may be specified on the command line or records may be
+          piped in.  Files ending in ".gz" will be decompressed when read.
+
+  -c$maxcount                     Number of records to output for each category.
+                           Use (-c) for all records.
+  -?, --help, --usage      Outputs program usage.
+
+  -t                       Output only query types
+  -h                       Output only hosts
+  -d                       Output only domains
+  -q                       Output query log lines
+  -f                       Output records added to file in real time (follow)
+                             Gives periodic reports.
+                             Uses: tail -f [FILE] | $0
+  -p$repinterval             Periodic report interval (secs)
+
+EOT
+  exit;
+}
+
+#-------------------------------------------------------------------------------
+# Mainline
+
+$SIG{INT} = \&ctrlc;
+$SIG{ALRM} = \&periodic;
+alarm $repinterval if ($opts{f});  # Do periodic reporting
+
+# Parse each input file
+parse_file($_) foreach (@ARGV);
+
+output();
+exit;
+
+#-------------------------------------------------------------------------------
+# Procedure to abort on control-c and output report
+sub ctrlc {
+  $SIG{INT} = 'DEFAULT';
+  output();
+  exit;
+}
+
+#-------------------------------------------------------------------------------
+# Procedure to output a periodic report
+sub periodic {
+  alarm $repinterval;
+  output();
+  print "\n";
+}
+
+#-------------------------------------------------------------------------------
+# Output results
+sub output {
+  print "\n";
+  print "DNS stats:  Total queries processed: $total\n";
+
+  if ($opts{h} or $all) {
+    print "\n";
+    printf "Query Sources: Total hosts: %s\n", scalar keys(%hosts);
+    print "Count      Percent IP Address\n";
+    print "---------- ------- ---------------\n";
+    my $count = $maxcount;
+    foreach (sort {$hosts{$b} <=> $hosts{$a}} keys(%hosts)) {
+      last if ($count-- == 0);
+      printf "%10s %7.4f %s\n", $hosts{$_}, $hosts{$_}*100/$total, $_;
+    }
+  }
+
+  if ($opts{d} or $all) {
+    print "\n";
+    printf "Domains: Total domains: %s\n", scalar keys(%domains);
+    print "Count      Percent Domain\n";
+    print "---------- ------- ----------------------------------------------------\n";
+    my $count = $maxcount;
+    foreach (sort {$domains{$b} <=> $domains{$a}} keys(%domains)) {
+      last if ($count-- == 0);
+      printf "%10s %7.4f %s\n", $domains{$_}, $domains{$_}*100/$total, $_;
+    }
+  }
+
+  if ($opts{t} or $all) {
+    print "\n";
+    print "Query Types:\n";
+    print "Count      Percent Type\n";
+    print "---------- ------- ---------------\n";
+    foreach (sort {$types{$b} <=> $types{$a}} keys(%types)) {
+      printf "%10s %7.4f %s\n", $types{$_}, $types{$_}*100/$total, $_;
+    }
+  }
+
+  # Reset counters
+  %hosts = ();
+  %domains = ();
+  %types = ();
+  $total = 0;
+}
+
+#-------------------------------------------------------------------------------
+# Parse the contents of a file
+sub parse_file {
+  my($inf) = @_;
+
+  # Check if compressed and open file
+  $inf =~ s/(.*\.gz)$/zcat $1|/;
+  $inf = "tail -0f $inf |" if ($opts{f});  # follow file
+  open(INF, $inf) or die "can't open $inf: $!";
+
+  # Parse records of the file
+  while (<INF>) {
+    chomp;
+    parse_log_line($_);
+  }
+  close INF or die "bad stat: $! $?";
+}
+
+#-------------------------------------------------------------------------------
+sub parse_log_line
+{
+  # The fields in the log record
+  my ($timestamp, $host, $id, $domain, $type);
+
+  # Grab the line we were given
+  my($line) = @_;
+
+  # Parse the line
+  $line =~ /^(.+) client ([^\s]+)#(\d+): .*query: ([^\s]+) (.+)$/;
+  ($timestamp, $host, $id, $domain, $type) = ($1, $2, $3, $4, $5);
+
+  # Increment counters for each field
+  $total++;
+  $hosts{$host}++;
+  $domains{lc($domain)}++;
+  $types{$type}++;
+
+  # Output log line
+  print $line,"\n" if ($opts{q});
+}

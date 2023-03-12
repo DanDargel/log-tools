@@ -1,0 +1,123 @@
+#!/usr/bin/perl
+# Calculate periodically display rate and number of lines being added to a file
+#
+# 2023-03-10  dargel(at)uwplatt.edu  Created
+
+use strict;
+use POSIX qw(strftime);
+
+# Defaults
+my $repinterval;
+
+# Parse command options
+use Getopt::Long;
+my %opts=();
+Getopt::Long::Configure qw(bundling);
+GetOptions(\%opts,
+  "p:10" => \$repinterval,
+  "h",
+  "help|usage|?" => \&usage) or usage();
+
+usage() if ($#ARGV > 0);
+
+# Subroutine to print usage
+sub usage {
+  print <<EOT;
+Usage: $0 [OPTIONS] [FILE]
+Calculate periodically display rate and number of lines being added to a file.
+  [FILE]  A log file may be specified on the command line or records may be
+          piped in.
+  -p10                     Periodic report interval (secs)
+  -h                       Use human readable sizes in metric scales.
+  -?, --help, --usage      Outputs program usage.
+EOT
+  exit;
+}
+
+# Setup interrupts
+$SIG{INT} = \&ctrlc;
+$SIG{ALRM} = \&periodic;
+$repinterval = 10 if ($repinterval < 1);
+alarm $repinterval;  # Do periodic reporting
+
+my $lines = 0;
+my $total_lines = 0;
+
+my $inf = $ARGV[0];
+$inf = '-' if (!$inf);  # Stdio if no input file
+$inf = "tail -0f $inf |" if ($inf ne '-');
+open(INF, $inf) or die "can't open $inf: $!";
+my $interval_start = time();
+
+while (<INF>) {
+  $lines++;
+  $total_lines++;
+}
+
+close INF or die "bad stat: $! $?";
+
+output();
+exit;
+
+#-------------------------------------------------------------------------------
+# Procedure to abort on control-c and output report
+sub ctrlc {
+  $SIG{INT} = 'DEFAULT';
+  output();
+  exit;
+}
+
+#-------------------------------------------------------------------------------
+# Procedure to output a periodic report
+sub periodic {
+  alarm $repinterval;
+  output();
+  $lines = 0;
+  $interval_start = time();
+}
+
+#-------------------------------------------------------------------------------
+# Output results
+sub output {
+  print $ARGV[0] . ": " if ($ARGV[0]);
+  my $interval = time() - $interval_start;
+  print strftime("%b %e %Y %H:%M:%S: ", localtime);
+  if ($opts{h}) {
+    print scalenum($lines), "/", scalenum($total_lines), " lines in ", scaletime($interval);
+    print " ", scalenumtime($lines/$interval) if ($interval);
+  } else {
+    print "$lines/$total_lines lines in $interval secs";
+    print " ", $lines/$interval, " lines/sec" if ($interval);
+  }
+  print "\n";
+}
+
+#-------------------------------------------------------------------------------
+# Pretty print number using metric scale
+sub scalenum {
+    my ($x) = @_;
+    return sprintf("%.3fT", $x/1000000000000) if ($x > 1000000000000);
+    return sprintf("%.3fG", $x/1000000000) if ($x > 1000000000);
+    return sprintf("%.3fM", $x/1000000) if ($x > 1000000);
+    return sprintf("%.3fK", $x/1000) if ($x > 1000);
+    return $x;
+}
+
+#-------------------------------------------------------------------------------
+# Pretty print time useing appropriate scale
+sub scaletime {
+    my ($x) = @_;
+    return $x/60/60 . " hr" if ($x >= 60 * 60);
+    return $x/60 . " min" if ($x >= 60);
+    return $x . " sec";
+}
+
+#-------------------------------------------------------------------------------
+# Pretty print time using appropriate scale
+sub scalenumtime {
+    my ($x) = @_;
+    return "0 lines/sec" if ($x == 0);
+    return scalenum($x * 60 * 60) . " lines/hr" if ($x * 60 < 1 );
+    return scalenum($x * 60) . " lines/min" if ($x < 1 );
+    return scalenum($x) . " lines/sec";
+}

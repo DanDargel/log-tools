@@ -1,0 +1,114 @@
+#!/usr/bin/perl
+# Find/filter log lines using comma separated list of MAC, IP, usernames, access points names, and other strings.
+# Interpret different formats for MAC addresses aa:bb:cc:dd:ee:ff, aa-bb-cc-dd-ee-ff, aabb-ccdd-eeff, aabbccddeeff
+# Matching is case insensitive.  Matches whole words or words near digits.Y
+#
+# 2023-03-11  dargel(at)uwplatt.edu  Created
+
+use strict;
+
+# Parse command options
+use Getopt::Long;
+my %opts=();
+Getopt::Long::Configure qw(bundling);
+GetOptions(\%opts,
+  "f",
+  "k",
+  "help|usage|?" => \&usage) or usage();
+
+usage() if (!$ARGV[0]);
+my @searchkeys = split(',', shift @ARGV);
+
+$ARGV[0] = '-' if (!$ARGV[0]);  # Stdio if no input file
+
+# Subroutine to print usage
+sub usage {
+  print <<EOT;
+Usage: $0 [OPTIONS] [MAC|IP|string,...] [FILE...]
+Find/filter log lines using comma separated list of MAC, IP, usernames, access points names, and other strings.
+Interpret different formats for MAC addresses aa:bb:cc:dd:ee:ff, aa-bb-cc-dd-ee-ff, aabb-ccdd-eeff, aabbccddeeff
+Matching is case insensitive.  Matches whole words or words near digits.Y
+  [FILE]  Log files may be specified on the command line or records may be
+          piped in.  Files ending in ".gz", ".bz", or ".bz2" will be
+          decompressed when read.  Use -l -c0 to output raw records.
+  -f                       Output records added to file in real time (follow)
+                             Uses: tail -f [FILE] | $0
+  -k                       Output Grep keys used to search.
+  -?, --help, --usage      Outputs program usage.
+EOT
+  exit;
+}
+
+
+#-------------------------------------------------------------------------------
+# Mainline
+
+# Build search keys of each format
+my @grepkeys;
+foreach (@searchkeys) {
+  # IP address
+  if (m/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/ && ($1<=255  && $2<=255 && $3<=255  && $4<=255)) {
+    push(@grepkeys, '(^|[^a-z0-9.])' . $_ . '([^a-z0-9.]|$)');
+
+  # MAC address
+  } elsif (m/^[0-9a-f]{12}$/i || m/^([0-9a-f]{2}:){5}[0-9a-f]{2}$/i || (m/^([0-9a-f]{2}-){5}[0-9a-f]{2}$/i || m/^([0-9a-f]{4}-){2}[0-9a-f]{4}$/i)) {
+    tr/-://d;
+    push(@grepkeys, '(^|[^a-z0-9])' . $_ . '([^a-z0-9]|$)');  #aabbccddeeff
+    push(@grepkeys, '(^|[^a-z0-9:])' . join(':', unpack('A2' x 6, $_)) . '([^a-z0-9:]|$)');  #aa:bb:cc:dd:ee:ff
+    push(@grepkeys, '(^|[^a-z0-9-])' . join('-', unpack('A2' x 6, $_)) . '([^a-z0-9-]|$)');  #aa-bb-cc-dd-ee-ff
+    push(@grepkeys, '(^|[^a-z0-9-])' . join('-', unpack('A4' x 3, $_)) . '([^a-z0-9-]|$)');  #aabb-ccdd-eeff
+
+  # all other keys
+  } else {
+    if (m/[0-9]/) {
+      push(@grepkeys, '\b' . $_ . '\b');  # match whole words words with digits
+    } else {
+      push(@grepkeys, '(^|[^a-z])' . $_ . '([^a-z]|$)');  # match whole words without digits
+    }
+  }
+}
+
+# Display Grep keys
+if ($opts{k}) {
+  print "Grep keys:\n";
+  print "  ", $_, "\n" foreach (@grepkeys);
+  print "\n";
+}
+
+# Parse each input fine
+parse_file($_) foreach (@ARGV);
+
+exit;
+
+#-------------------------------------------------------------------------------
+# Parse the contents of a file
+sub parse_file {
+  my($inf) = @_;
+
+  # Check if compressed and open file
+  $inf =~ s/(.*\.gz)$/zcat $1|/;
+  $inf =~ s/(.*\.bz)$/bzcat $1|/;
+  $inf =~ s/(.*\.bz2)$/bzcat $1|/;
+  $inf = "tail -0f $inf |" if ($opts{f});  # follow file
+  open(INF, $inf) or die "can't open $inf: $!";
+
+  # Parse records of the file
+  while (<INF>) {
+    parse_log_line($_);
+  }
+  close INF or die "bad stat: $! $?";
+}
+
+#-------------------------------------------------------------------------------
+sub parse_log_line
+{
+  # Grab the line we were given
+  my($line) = @_;
+
+  foreach (@grepkeys) {
+    if ($line =~ /$_/i) {
+      print $line;
+      last;
+    }
+  }
+}
