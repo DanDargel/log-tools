@@ -7,3 +7,8 @@
 - parse_windows_syslog: Parse the snare syslog records from windows systems.
 - rate: Calculate periodically display rate and number of lines being added to a file.
 - unusual: Search a log with zgrep and report lines which do not match a file of usual patterns.
+
+To install:
+- get clone https://github.com/DanDargel/log-tools
+- cd log-tools
+- make install
