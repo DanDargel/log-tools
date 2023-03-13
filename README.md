@@ -9,6 +9,7 @@
 - unusual: Search a log with zgrep and report lines which do not match a file of usual patterns.
 
 To install:
-- get clone https://github.com/DanDargel/log-tools
+- if git not installed: zypper in git-core
+- git clone https://github.com/DanDargel/log-tools
 - cd log-tools
 - make install
