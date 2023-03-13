@@ -63,7 +63,7 @@ foreach (@searchkeys) {
     if (m/[0-9]/) {
       push(@grepkeys, '\b' . $_ . '\b');  # match whole words words with digits
     } else {
-      push(@grepkeys, '(^|[^a-z])' . $_ . '([^a-z]|$)');  # match whole words without digits
+      push(@grepkeys, '(^|[^a-z_])' . $_ . '([^a-z_]|$)');  # match whole words without digits for building names in WAPs
     }
   }
 }
