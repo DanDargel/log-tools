@@ -2,6 +2,7 @@
 # Parse the syslog output of a Barracuda AntiSPAM Appliance
 #
 # 2007-03-30  dargel(at)uwplatt.edu  Created (Parts from Barracuda support)
+# 2023-03-17  dargel(at)uwplatt.edu  Added more codes from https://campus.barracuda.com/product/emailsecuritygateway/doc/12193950/syslog-and-the-barracuda-email-security-gateway/
 
 use strict;
 use Date::Parse;
@@ -15,7 +16,10 @@ my %actions = (
   4 => 'Tagged',
   5 => 'Deferred',
   6 => 'Per-User Quarantined',
-  7 => 'Whitelisted'
+  7 => 'Whitelisted',
+  8 => 'Encrypted Message',
+  9 => 'Redirected Message',
+  10 => 'Attachments Stubbed'
 );
 # Hash of Barracuda Action Codes (for SEND service)
 my %actions_send = (
@@ -72,7 +76,34 @@ my %reasons = (
   57 => 'TLS Already Active',
   58 => 'Too Many Errors',
   59 => 'Need STARTTLS First',
-  60 => 'Spam Fingerprint Found'
+  60 => 'Spam Fingerprint Found',
+  61 => 'Barracuda Reputation Allow List',
+  62 => 'Barracuda Reputation Block List',
+  63 => 'DomainKeys',
+  64 => 'Recipient Verification Unavailable',
+  65 => 'Realtime Intent',
+  66 => 'Client Reverse DNS',
+  67 => 'Email Registry',
+  68 => 'Invalid Bounce',
+  69 => 'Intent - Adult',
+  70 => 'Intent - Political',
+  71 => 'Multi-Level Intent',
+  72 => 'Attachment Limit Exceeded',
+  73 => 'System Busy',
+  74 => 'BRTS Intent',
+  75 => 'Per Domain Recipient',
+  76 => 'Per Domain Sender',
+  77 => 'Per Domain Client IP',
+  78 => 'Sender Spoofed',
+  79 => 'Attachment Content',
+  80 => 'Outlook Add-in',
+  82 => 'Barracuda IP/Domain Reputation',
+  83 => 'Authentication Failure',
+  85 => 'Attachment Size',
+  86 => 'Virus detected by Extended Malware Protection',
+  87 => 'Extended Malware Protection engine is busy',
+  88 => 'A message was categorized for Email Category',
+  89 => 'Macro Blocked'
 );
 
 # Defaults
