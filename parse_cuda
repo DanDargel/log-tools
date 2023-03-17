@@ -17,8 +17,8 @@ my %actions = (
   5 => 'Deferred',
   6 => 'Per-User Quarantined',
   7 => 'Whitelisted',
-  8 => 'Encrypted Message',
-  9 => 'Redirected Message',
+  8 => 'Encrypted',
+  9 => 'Redirected',
   10 => 'Attachments Stubbed'
 );
 # Hash of Barracuda Action Codes (for SEND service)
@@ -189,10 +189,12 @@ a readable format.
   --score_max=NUMBER       Score must be <= NUMBER
   --action=PATTERN         Action must match regexp
                              RECV/SCAN Actions: 
-                               Allowed, Aborted, Blocked, Quarantined, Tagged,
-                               Deferred, Per-User Quarantined, Whitelisted
-                             SEND Actions:
-                               Delivered, Rejected, Deferred, Expired
+EOT
+  # Output actions
+  print "                               $_\n" foreach (values(%actions));
+  print "                             SEND Actions:\n";
+  print "                               $_\n" foreach (values(%actions_send));
+  print <<EOT;
   --reason=PATTERN         Reason must match regexp
                              RECV/SEND Reasons:
 EOT
