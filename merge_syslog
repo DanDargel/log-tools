@@ -1,0 +1,114 @@
+#!/usr/bin/perl
+# Merge two syslog files using first date found in bsd format expecting lines in 
+# cronological order.  Prefer lines from first file when times match.
+# Only works in current UNIX epoch and between 2000-2037
+#
+# 2025-02-01  dargel(at)uwplatt.edu  Created
+
+use strict;
+use POSIX qw(strftime);
+use Date::Parse;
+
+# Parse command options
+use Getopt::Long;
+my %opts=();
+Getopt::Long::Configure qw(bundling);
+GetOptions(\%opts,
+  "H",
+  "help|usage|?" => \&usage) or usage();
+
+usage() if (@ARGV != 2);  # Must have two files
+
+# Subroutine to print usage
+sub usage {
+  print <<EOT;
+Usage: $0 [OPTIONS] [FILE] [FILE]
+Merge two syslog files using first date found in bsd format expecting lines in 
+cronological order.  Prefer lines from first file when times match.
+Only works in current UNIX epoch and between 2000-2037
+
+  [FILE]       Log files in with bsd time format.  May have text such as filename preceeding date
+               Files ending in ".xz", ".gz", ".bz", or ".bz2" will be decompressed when read.
+  -H                       Prepend filename for to each line.
+  -?, --help, --usage      Outputs program usage.
+
+EOT
+  exit;
+}
+
+#-------------------------------------------------------------------------------
+# Mainline
+
+my $fn1 = shift @ARGV;
+my $fn2 = shift @ARGV;
+
+# Check if compressed and open file
+my $fn = $fn1;
+$fn =~ s/(.*\.xz)$/xzcat $1|/;
+$fn =~ s/(.*\.gz)$/zcat $1|/;
+$fn =~ s/(.*\.bz)$/bzcat $1|/;
+$fn =~ s/(.*\.bz2)$/bzcat $1|/;
+open(INF1, $fn) or die "can't open $fn1: $!";
+
+# Check if compressed and open file
+$fn = $fn2;
+$fn =~ s/(.*\.xz)$/xzcat $1|/;
+$fn =~ s/(.*\.gz)$/zcat $1|/;
+$fn =~ s/(.*\.bz)$/bzcat $1|/;
+$fn =~ s/(.*\.bz2)$/bzcat $1|/;
+open(INF2, $fn) or die "can't open $fn2: $!";
+
+# Read and process lines
+my ($line1,$line2);
+unless ($line2 = <INF2>) {
+  emit_file($fn1,\*INF1);
+  exit;
+}
+while ($line1 = <INF1>) {
+  if (find_time($line1) > find_time($line2)) {
+    print "$fn2:" if $opts{H};
+    print $line2;
+    unless ($line2 = <INF2>) {
+      print "$fn1:" if $opts{H};
+      print $line1;
+      emit_file($fn1,\*INF1);
+      exit;
+    }
+    redo;
+  }
+  print "$fn1:" if $opts{H};
+  print $line1;
+}
+print "$fn2:" if $opts{H};
+print $line2;
+emit_file($fn2,\*INF2);
+exit;
+
+#-------------------------------------------------------------------------------
+# Print out the remainder of the file
+sub emit_file 
+{
+  my $fn = shift;
+  my $fh = shift;
+
+  while (<$fh>) {
+    print "$fn:" if $opts{H};
+    print;
+  }
+}
+
+#-------------------------------------------------------------------------------
+# Find times in Mon dd hh:mm:ss.sssss yyyy format
+# Find times in Mon dd yyyy hh:mm:ss.sssss format
+sub find_time
+{
+  my($line) = @_;
+
+  $line =~ /(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)( [ 0123]?\d)( 20\d\d)?( [ 012]?\d:[0-5]\d)(:[0-6]\d)?(\.\d+)?( 20\d\d)?(Z| ?U?T?C?[\-+][012]\d:?[0-5]\d)?( [ECMPH][SD]T| AK[SD]T| GMT| UTC)?/
+    or return 0;
+
+  my $time = str2time($&)
+    or return 0;
+
+  return $time;
+}

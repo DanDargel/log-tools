@@ -1,0 +1,180 @@
+#!/usr/bin/perl
+# Look for date/times in logs and adjust to different timezone
+# Only matches US and GMT/UTC timezones
+# Only works in current UNIX epoch and between 2000-2037
+#
+# 2025-01-21  dargel(at)uwplatt.edu  Created
+
+use strict;
+use POSIX qw(strftime);
+use Date::Parse;
+my $count = 0;
+
+# Get time offset to apply
+my $offset = 0;   # Offset to apply in seconds
+for (my $i = 0; $i <= $#ARGV; $i++) {
+  if ($ARGV[$i] =~ /^([\-+])(\d?\d):?(\d\d)?:?(\d\d)?$/) {
+    $offset = $2 * 3600 + $3 * 60 + $4;
+    $offset = -1 * $offset if ($1 eq '-');
+    delete $ARGV[$i];
+  }
+}
+
+# Parse command options
+my ($tz,$srctz,$fmt);
+use Getopt::Long;
+my %opts=();
+Getopt::Long::Configure qw(bundling);
+GetOptions(\%opts,
+  "srctz=s" => \$srctz,
+  "tz=s" => \$tz,
+  "iso",
+  "rfc822",
+  "rfc1123",
+  "bsd",
+  "fmt=s" => \$fmt,
+  "help|usage|?" => \&usage) or usage();
+$ENV{TZ} = $tz if ($tz);
+
+$ARGV[0] = '-' if (!$ARGV[0]);  # Stdio if no input file
+
+# Subroutine to print usage
+sub usage {
+  print <<EOT;
+Usage: $0 [OPTIONS] [+|-OFFSET] [FILE]...
+Look for date/times in logs and adjust to different timezone
+Only matches US and GMT/UTC timezones
+Only works in current UNIX epoch and between 2000-2037
+
+  [+|-OFFSET]  Amount to offsite time by (ex: +5 adds 5 hours),
+               may be expressed as TZ offset (ex: -600 or -6:00 is -6 hours),
+               may include seconds (ex: -6:00:30)
+  [FILE]       Log files may be specified on the command line or records may be
+               piped in.  Files ending in ".xz", ".gz", ".bz", or ".bz2" will be
+               decompressed when read.
+
+  --tz=TIMEZONE            Timezone to use in/out (default: local timezone)
+  --srctz=TIMEZONE         Assume TIMEZONE if timezone is not in date/time (default: local timezone)
+  --iso                    Output date/time in ISO8601 format
+  --rfc822                 Output date/time in RFC822 format (Dow, dd Mon yyyy hh:mm:ss zzzz)
+  --rfc1123                Output date/time in RFC1123 format (Dow Mon dd hh:mm:ss ZZZ yyyy)
+  --bsd                    Output date/time in format used by syslog (Mon dd hh:mm:ss)
+  --fmt=FORMAT             Output date/time using POSIX format string (ex: --fmt="%F %T")
+                           See `man 3p strftime` for format specifiers
+  -?, --help, --usage      Outputs program usage.
+
+EOT
+  exit;
+}
+
+#-------------------------------------------------------------------------------
+# Mainline
+
+# Parse each input file
+parse_file($_) foreach (@ARGV);
+
+exit;
+
+#-------------------------------------------------------------------------------
+# Parse the contents of a file
+sub parse_file {
+  my($inf) = @_;
+
+  # Check if compressed and open file
+  $inf =~ s/(.*\.xz)$/xzcat $1|/;
+  $inf =~ s/(.*\.gz)$/zcat $1|/;
+  $inf =~ s/(.*\.bz)$/bzcat $1|/;
+  $inf =~ s/(.*\.bz2)$/bzcat $1|/;
+  open(INF, $inf) or die "can't open $inf: $!";
+
+  # Parse records of the file
+  while (<INF>) {
+    $count = 0;
+    chomp;
+    print convert_yyyy_dd_mm($_), "\n";
+  }
+  close INF or die "bad stat: $! $?";
+}
+
+#-------------------------------------------------------------------------------
+# Find times in yyyy/dd/mm hh:mm:ss.sssss-zz:zz format
+# Find times in yyyy-dd-mm hh:mm:ss.sssss-zz:zz format
+# Find times in yyyy-dd-mm hh:mm:ss.sssss UTC-zz:zz format
+# Find times in yyyy-dd-mmThh:mm:ss.sssss-zz:zzZ format
+sub convert_yyyy_dd_mm
+{
+  my($line) = @_;
+  return $line if (length($line) < 10);
+
+  $line =~ /(20\d\d)([\-\/])([01]?\d)(\g2)([0123]?\d)([ T\-][ 012]?\d:[0-5]\d)(:[0-6]\d)?(\.\d+)?( ?Z| ?U?T?C?[\-+][012]\d:?[0-5]\d)?( [ECMPH][SD]T| AK[SD]T| GMT| UTC)?/
+    or return convert_mon_dd($line);
+
+  my $time = str2time($&,$srctz)
+    or return convert_mon_dd($line);
+
+  return convert_mon_dd($`) . format_time($time) . convert_yyyy_dd_mm($');
+}
+
+#-------------------------------------------------------------------------------
+# Find times in Day, Mon dd hh:mm:ss.sssss yyyy format
+# Find times in Mon dd hh:mm:ss.sssss yyyy format
+# Find times in Mon dd yyyy hh:mm:ss.sssss format
+sub convert_mon_dd
+{
+  my($line) = @_;
+  return $line if (length($line) < 10);
+
+  $line =~ /(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)( [ 0123]?\d)( 20\d\d)?( [ 012]?\d:[0-5]\d)(:[0-6]\d)?(\.\d+)?( 20\d\d)?(Z| ?U?T?C?[\-+][012]\d:?[0-5]\d)?( [ECMPH][SD]T| AK[SD]T| GMT| UTC)?/
+    or return convert_dd_mm_yyyy($line);
+
+  my $time = str2time($&,$srctz)
+    or return convert_dd_mm_yyyy($line);
+
+  my $a = $`;
+  my $z = $';
+  $a =~ s/(Sun(day)?|Mon(day)?|Tue(sday)?|Wed(nesday)?|Thu(rsday)?|Fri(day)?|Sat(urday)?),? $//i;
+
+  return convert_dd_mm_yyyy($a) . format_time($time) . convert_mon_dd($z);
+}
+
+#-------------------------------------------------------------------------------
+# Find times in dd/mm/yyyy hh:mm:ss.sssss-zz:zz format
+# Find times in dd-mm-yyyy hh:mm:ss.sssss-zz:zz format
+sub convert_dd_mm_yyyy
+{
+  my($line) = @_;
+  return $line if (length($line) < 13);
+
+  $line =~ /([0123]?\d)([\-\/])([01]?\d)(\g2)(20\d\d)([ T\-][ 012]?\d:[0-5]\d)(:[0-6]\d)?(\.\d+)?( ?Z| ?U?T?C?[\-+][012]\d:?[0-5]\d)?( [ECMPH][SD]T| AK[SD]T| GMT| UTC)?/
+    or return $line;
+
+  my $time = str2time($&,$srctz)
+    or return $line;
+
+  my $a = $`;
+  my $z = $';
+  $a =~ s/(Sun(day)?|Mon(day)?|Tue(sday)?|Wed(nesday)?|Thu(rsday)?|Fri(day)?|Sat(urday)?),? $//i;
+
+  return $a . format_time($time) . convert_dd_mm_yyyy($z);
+}
+
+
+#-------------------------------------------------------------------------------
+sub format_time
+{
+  my($time) = @_;
+
+  $count++;
+
+  $time = $time + $offset;  # Apply time offset
+  my $subsec;
+  $subsec = $1 if $time =~ /(\.\d+)$/;
+
+  return POSIX::strftime($fmt, localtime($time)) if $fmt;
+  return POSIX::strftime("%FT%T$subsec%z", localtime($time)) if $opts{iso};
+  return POSIX::strftime("%a, %d %b %Y %H:%M:%S %z", localtime($time)) if $opts{rfc822};
+  return POSIX::strftime("%a %b %e %H:%M:%S %Z %Y", localtime($time)) if $opts{rfc1123};
+  return POSIX::strftime("%b %e %H:%M:%S", localtime($time)) if $opts{bsd};
+  return POSIX::strftime("%F %T$subsec %Z", localtime($time));
+#  return scalar localtime($time);
+}
