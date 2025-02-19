@@ -2,6 +2,8 @@
 # Parse the snare syslog records from windows systems
 #
 # 2017-03-08 dargel(at)uwplatt.edu  Created
+# 2024-08-13 dargel(at)uwplatt.edu  Added more fields
+# 2024-10-30 dargel(at)uwplatt.edu  Better parsing of network addresses and add Logon ID which can be correlated to other records
 
 use strict;
 
@@ -25,6 +27,7 @@ sub parse_file {
   # Check if compressed and open file
   $inf =~ s/(.*\.gz)$/zcat $1|/;
   $inf =~ s/(.*\.bz2)$/bzcat $1|/;
+  $inf =~ s/(.*\.xz)$/xzcat $1|/;
   open(INF, $inf) or die "can't open $inf: $!";
 
   # Parse records of the file
@@ -38,7 +41,7 @@ sub parse_file {
 #-------------------------------------------------------------------------------
 sub parse_log_line
 {
-  my ($ClientAddress,$Account,$SourceWorkstation);
+  my ($Message,$Account,$ClientAddress,$Account,$SourceWorkstation,$ServiceName,$LogonID);
 
   # Grab the line we were given
   my($line) = @_;
@@ -47,13 +50,20 @@ sub parse_log_line
   $lines++;
 
   # Parse the line
-  $line =~ /^(\w+ +\d+ ..:..:..) ([^ ]+) MSWinEventLog\t(\d+)\t([^\t]+)\t(\d+)\t([^\t]+)\t(\d+)\t([^\t]+)\t([^\t]+)\t([^\t]+)\t([^\t]+)\t([^\t]+)\t([^\t]+)\t(.*)/;
+  $line =~ /(\w+ +\d+ ..:..:..) ([^ ]+) MSWinEventLog\t(\d+)\t([^\t]+)\t(\d+)\t([^\t]+)\t(\d+)\t([^\t]+)\t([^\t]+)\t([^\t]+)\t([^\t]+)\t([^\t]+)\t([^\t]+)\t(.*)/;
   my ($TimeStamp, $Hostname, $Criticality, $EventLogSource, $SnareCounter, $SubmitTime, $EventID, $SourceName, $UserName, $SIDType, $EventLogType, $ComputerName, $Category, $Data) = ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14);
-#  ($Account) = ($1) if ($Data =~ /Account Name:  ([^\s]+)/);
-  ($ClientAddress) = ($1) if ($Data =~ /Client Address:  ::ffff:([^\s]+)/);
+  ($Message) = ($1) if ($Data =~ /\s*(.+?)  /);
+  ($Account) = "By:" . ($1) if ($Data =~ /Account Name:  ([^\s]+)/) && ($1 ne '-');
+  ($ClientAddress) = ($2) . ":" . ($3) if ($Data =~ /Client Address:  (::ffff:)*([^\s]+)\s+Client Port:\s+([^\s]+)/);
+  ($ClientAddress) = ($1) . ":" . ($2) if ($Data =~ /Source Network Address: ([^\s]+)\s+Source Port:\s+([^\s]+)/);
+  ($ClientAddress) = ($1) . ":" . ($2) if ($Data =~ /Network Address: ([^\s]+)\s+Port:\s+([^\s]+)/);
+  #  ($ClientAddress) = $ClientAddress . ":" . ($1) if ($Data =~ /Source Port:  ([^\s]+)/);
   ($SourceWorkstation) = ($1) if ($Data =~ /Source Workstation: ([^\s]+)/);
+  ($ServiceName) = ($1) if ($Data =~ /Service Name:  ([^\s]+)/);
+  ($LogonID) = ($1) if ($Data =~ /Logon ID:  ([^\s]+)/);
+  ($LogonID) = ($1) if ($Data =~ /Logon ID:  0x0\s.*  Logon ID:  ([^\s]+)/);
 
   # Output log line
 #  print "$SubmitTime, $UserName, $EventLogType, $Category, $Account\n" if ($Account !~ /\$$/ && $UserName !~ /\$\@/ && $Account ne '-');
-  print "$SubmitTime,$UserName,$EventLogType,$Category,$SourceWorkstation,$ClientAddress\n" if ($UserName !~ /\$$/ && $UserName !~ /\$\@/ && $UserName ne '');
+  print "$SubmitTime,$EventLogType,$EventID,$Hostname,$LogonID,$UserName,$Category,$Message,$Account,$ServiceName,$SourceWorkstation,$ClientAddress\n" if ($UserName !~ /\$$/ && $UserName !~ /\$\@/ && $UserName ne '');
 }
